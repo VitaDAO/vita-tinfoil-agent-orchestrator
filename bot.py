@@ -50,10 +50,18 @@ BOT_AUTH_SECRET = os.environ.get("BOT_AUTH_SECRET", "")
 CLASSIFIER_URL = os.environ.get("CLASSIFIER_URL", "")
 WEBHOOK_PORT = int(os.environ.get("WEBHOOK_PORT", "8080"))
 
-# Tinfoil TEE sandbox — feature flag for test users
-TINFOIL_SANDBOX_URL = os.environ.get("TINFOIL_SANDBOX_URL", "")  # e.g. https://vita-agent-sandbox.debug.vitality-now.containers.tinfoil.dev
+# Tinfoil TEE — per-user sandbox management
+TINFOIL_ADMIN_KEY = os.environ.get("TINFOIL_ADMIN_KEY", "")
+TINFOIL_SANDBOX_REPO = os.environ.get("TINFOIL_SANDBOX_REPO", "VitaDAO/vita-tinfoil-agent-sandbox")
+TINFOIL_SANDBOX_TAG = os.environ.get("TINFOIL_SANDBOX_TAG", "v0.4.2")
 TINFOIL_SANDBOX_AUTH_SECRET = os.environ.get("TINFOIL_SANDBOX_AUTH_SECRET", "")
-TINFOIL_TEST_USERS = set(os.environ.get("TINFOIL_TEST_USERS", "").split(",")) - {""}
+TINFOIL_SANDBOX_DEBUG = os.environ.get("TINFOIL_SANDBOX_DEBUG", "true").lower() == "true"
+TINFOIL_API_BASE = "https://api.tinfoil.sh"
+# Secrets to inject into each per-user sandbox (must exist in Tinfoil org)
+TINFOIL_SANDBOX_SECRETS = [
+    "LLM_BASE_URL", "LLM_API_KEY", "QMD_API_SECRET", "QMD_GPU_URL",
+    "CRON_WEBHOOK_SECRET", "SANDBOX_AUTH_SECRET", "SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY",
+]
 
 # LLM provider config — passed to sandbox via env vars for dynamic model switching
 LLM_BASE_URL = os.environ.get("LLM_BASE_URL", "")
@@ -969,19 +977,161 @@ async def call_aubrai(user_id: str, message: str) -> str | None:
         return None
 
 
-# ── Tinfoil TEE sandbox ────────────────────────────────────────────────
+# ── Tinfoil TEE — per-user sandbox management ────────────────────────────
+
+# In-memory cache: user_id → {"container_id": "...", "url": "..."}
+tinfoil_sandbox_cache: dict[str, dict] = {}
+
+
+def _tinfoil_admin_headers() -> dict[str, str]:
+    return {
+        "Authorization": f"Bearer {TINFOIL_ADMIN_KEY}",
+        "Content-Type": "application/json",
+    }
+
+
+async def get_or_create_tinfoil_sandbox(user_id: str) -> dict:
+    """Get or create a per-user Tinfoil sandbox container.
+    Returns {"container_id": "...", "url": "..."}."""
+    uid = user_id[:8]
+
+    # 1. Check in-memory cache
+    if user_id in tinfoil_sandbox_cache:
+        cached = tinfoil_sandbox_cache[user_id]
+        # Verify it's still running
+        try:
+            r = await http.get(
+                f"{cached['url']}/health",
+                headers=_tinfoil_headers(),
+                timeout=httpx.Timeout(connect=5, read=5, write=5, pool=5),
+            )
+            if r.status_code == 200:
+                return cached
+        except Exception:
+            pass
+        del tinfoil_sandbox_cache[user_id]
+        log.info(f"[{uid}] [TINFOIL] Cached sandbox unreachable, will reconnect/create")
+
+    # 2. Check Supabase for existing container
+    record = await sb_select_one(
+        "openclaw_agents", "user_id,tinfoil_container_id,tinfoil_container_url",
+        {"user_id": f"eq.{user_id}"},
+        schema="agents",
+    )
+    if record and record.get("tinfoil_container_url"):
+        url = record["tinfoil_container_url"]
+        container_id = record.get("tinfoil_container_id", "")
+        try:
+            r = await http.get(
+                f"{url}/health",
+                headers=_tinfoil_headers(),
+                timeout=httpx.Timeout(connect=5, read=10, write=5, pool=5),
+            )
+            if r.status_code == 200:
+                info = {"container_id": container_id, "url": url}
+                tinfoil_sandbox_cache[user_id] = info
+                log.info(f"[{uid}] [TINFOIL] Reconnected to sandbox: {url}")
+                return info
+        except Exception as e:
+            log.warning(f"[{uid}] [TINFOIL] Saved sandbox unreachable ({url}): {e}")
+
+    # 3. Create a new sandbox via Tinfoil Admin API
+    if not TINFOIL_ADMIN_KEY:
+        raise RuntimeError("TINFOIL_ADMIN_KEY not configured — cannot create sandbox")
+
+    container_name = f"vita-sandbox-{uid}"
+    log.info(f"[{uid}] [TINFOIL] Creating new sandbox: {container_name}")
+
+    create_payload = {
+        "name": container_name,
+        "repo": TINFOIL_SANDBOX_REPO,
+        "tag": TINFOIL_SANDBOX_TAG,
+        "variables": {
+            "LLM_MODEL_ID": LLM_MODEL_ID,
+            "LLM_MODEL_NAME": LLM_MODEL_NAME,
+            "LOG_LEVEL": "info",
+            "SANDBOX_USER_ID": user_id,
+        },
+        "secrets": TINFOIL_SANDBOX_SECRETS,
+        "debug": TINFOIL_SANDBOX_DEBUG,
+    }
+
+    r = await http.post(
+        f"{TINFOIL_API_BASE}/api/containers",
+        headers=_tinfoil_admin_headers(),
+        json=create_payload,
+        timeout=httpx.Timeout(connect=10, read=60, write=10, pool=10),
+    )
+    if r.status_code not in (200, 201):
+        raise RuntimeError(f"Failed to create Tinfoil sandbox: {r.status_code} {r.text[:300]}")
+
+    container_data = r.json()
+    container_id = container_data.get("id", "")
+    # URL format: {name}.debug.{org}.containers.tinfoil.dev (for debug mode)
+    container_url = container_data.get("url", "")
+    if not container_url:
+        # Construct URL from the container name if not in response
+        container_url = f"https://{container_name}.debug.vitality-now.containers.tinfoil.dev"
+
+    log.info(f"[{uid}] [TINFOIL] Sandbox created: {container_id} at {container_url}")
+
+    # Wait for container to be ready (poll health)
+    ready = False
+    for attempt in range(30):  # up to 5 minutes
+        await asyncio.sleep(10)
+        try:
+            hr = await http.get(
+                f"{container_url}/health",
+                headers=_tinfoil_headers(),
+                timeout=httpx.Timeout(connect=5, read=5, write=5, pool=5),
+            )
+            if hr.status_code == 200:
+                ready = True
+                break
+        except Exception:
+            pass
+        if attempt % 6 == 5:
+            log.info(f"[{uid}] [TINFOIL] Waiting for sandbox to be ready... ({attempt * 10}s)")
+
+    if not ready:
+        raise RuntimeError(f"Tinfoil sandbox {container_name} failed to start within 5 minutes")
+
+    log.info(f"[{uid}] [TINFOIL] Sandbox ready: {container_url}")
+
+    # Save to Supabase
+    await sb_upsert(
+        "openclaw_agents",
+        {
+            "user_id": user_id,
+            "tinfoil_container_id": container_id,
+            "tinfoil_container_url": container_url,
+        },
+        schema="agents",
+        on_conflict="user_id",
+    )
+
+    info = {"container_id": container_id, "url": container_url}
+    tinfoil_sandbox_cache[user_id] = info
+    return info
+
+
+# ── Tinfoil TEE — message handling ──────────────────────────────────────
 async def handle_user_message_tinfoil(user_id: str, message_text: str) -> str:
-    """Route a message through the Tinfoil TEE sandbox instead of E2B."""
+    """Route a message through the user's Tinfoil TEE sandbox."""
     t0 = asyncio.get_event_loop().time()
     uid = user_id[:8]
 
-    # Step 1: Fetch only bot-safe context. Encrypted health data is fetched inside the enclave.
-    log.info(f"[{uid}] [TINFOIL] Fetching supermemory context...")
-    sm_ctx = await fetch_supermemory_context(user_id, message_text)
+    # Step 1: Get or create per-user sandbox + fetch context in parallel
+    log.info(f"[{uid}] [TINFOIL] Getting sandbox + fetching context...")
+    sandbox_info, sm_ctx = await asyncio.gather(
+        get_or_create_tinfoil_sandbox(user_id),
+        fetch_supermemory_context(user_id, message_text),
+    )
+    sandbox_url = sandbox_info["url"]
     elapsed = (asyncio.get_event_loop().time() - t0) * 1000
     log.info(
-        f"[{uid}] [TINFOIL] Context ready in {elapsed:.0f}ms — "
-        f"supermemory: {'yes' if sm_ctx else 'no'}"
+        f"[{uid}] [TINFOIL] Ready in {elapsed:.0f}ms — "
+        f"sandbox: {sandbox_url}, supermemory: {'yes' if sm_ctx else 'no'}"
     )
 
     # Step 2: Write static bootstrap files + restore memory from QMD.
@@ -1007,7 +1157,7 @@ async def handle_user_message_tinfoil(user_id: str, message_text: str) -> str:
 
     try:
         ingest_r = await http.post(
-            f"{TINFOIL_SANDBOX_URL}/ingest",
+            f"{sandbox_url}/ingest",
             headers=_tinfoil_headers(),
             json={"files": files_to_write},
             timeout=httpx.Timeout(connect=10, read=30, write=10, pool=10),
@@ -1025,7 +1175,7 @@ async def handle_user_message_tinfoil(user_id: str, message_text: str) -> str:
     log.info(f"[{uid}] [TINFOIL] Invoking agent...")
 
     invoke_r = await http.post(
-        f"{TINFOIL_SANDBOX_URL}/invoke",
+        f"{sandbox_url}/invoke",
         headers=_tinfoil_headers(),
         json={
             "message": message_text,
@@ -1087,7 +1237,7 @@ async def handle_user_message_tinfoil(user_id: str, message_text: str) -> str:
 # ── Core orchestrator ────────────────────────────────────────────────────
 async def handle_user_message(user_id: str, message_text: str) -> str:
     # Feature flag: route Tinfoil test users to TEE sandbox
-    if TINFOIL_SANDBOX_URL and user_id in TINFOIL_TEST_USERS:
+    if TINFOIL_ADMIN_KEY:
         return await handle_user_message_tinfoil(user_id, message_text)
 
     t0 = asyncio.get_event_loop().time()
@@ -1987,6 +2137,131 @@ async def handle_health(request: web.Request) -> web.Response:
     return web.json_response({"status": "ok"})
 
 
+# ── VitaApp integration endpoints ────────────────────────────────────────
+
+async def handle_provision_agent(request: web.Request) -> web.Response:
+    """POST /api/provision-agent — called by VitaApp when user connects Telegram.
+    Creates a per-user Tinfoil sandbox + Telegram link token.
+    Returns sandbox_url so VitaApp can send DEK directly to the sandbox."""
+    auth = request.headers.get("Authorization", "")
+    if BOT_AUTH_SECRET and auth != f"Bearer {BOT_AUTH_SECRET}":
+        return web.json_response({"error": "Unauthorized"}, status=401)
+
+    try:
+        payload = await request.json()
+    except Exception:
+        return web.json_response({"error": "Invalid JSON"}, status=400)
+
+    user_id = payload.get("user_id", "")
+    if not user_id:
+        return web.json_response({"error": "user_id required"}, status=400)
+
+    uid = user_id[:8]
+
+    # Verify Pro subscription
+    tier = await get_user_tier(user_id)
+    if tier != "pro":
+        return web.json_response({
+            "error": "pro_required",
+            "message": "Pro subscription required for the personal AI agent.",
+        }, status=403)
+
+    # Create or get existing sandbox
+    try:
+        sandbox_info = await get_or_create_tinfoil_sandbox(user_id)
+    except Exception as e:
+        log.error(f"[{uid}] [PROVISION] Failed to create sandbox: {e}")
+        return web.json_response({"error": "sandbox_creation_failed", "message": str(e)}, status=500)
+
+    # Create a Telegram link token
+    import secrets as secrets_mod
+    link_token = secrets_mod.token_urlsafe(32)
+    try:
+        await sb_upsert(
+            "telegram_links",
+            {"user_id": user_id, "link_token": link_token},
+            schema="agents",
+            on_conflict="user_id",
+        )
+    except Exception as e:
+        log.warning(f"[{uid}] [PROVISION] Failed to create link token: {e}")
+        link_token = None
+
+    log.info(f"[{uid}] [PROVISION] Agent provisioned: {sandbox_info['url']}")
+
+    result = {
+        "ok": True,
+        "user_id": user_id,
+        "sandbox_url": sandbox_info["url"],
+        "container_id": sandbox_info.get("container_id", ""),
+        "status": "ready",
+    }
+    if link_token:
+        result["link_token"] = link_token
+        result["telegram_link"] = f"https://t.me/VITAAPP_PERSONAL_AI_BOT?start={link_token}"
+
+    return web.json_response(result)
+
+
+async def handle_agent_status(request: web.Request) -> web.Response:
+    """GET /api/agent-status?user_id=X — returns sandbox status.
+    Called by VitaApp on the Telegram Agent settings page or when bot says to re-authorize."""
+    auth = request.headers.get("Authorization", "")
+    if BOT_AUTH_SECRET and auth != f"Bearer {BOT_AUTH_SECRET}":
+        return web.json_response({"error": "Unauthorized"}, status=401)
+
+    user_id = request.query.get("user_id", "")
+    if not user_id:
+        return web.json_response({"error": "user_id required"}, status=400)
+
+    uid = user_id[:8]
+
+    # Check if user has a sandbox
+    record = await sb_select_one(
+        "openclaw_agents", "user_id,tinfoil_container_id,tinfoil_container_url",
+        {"user_id": f"eq.{user_id}"},
+        schema="agents",
+    )
+
+    if not record or not record.get("tinfoil_container_url"):
+        return web.json_response({
+            "user_id": user_id,
+            "provisioned": False,
+            "sandbox_url": None,
+            "status": "not_provisioned",
+            "locked": True,
+        })
+
+    sandbox_url = record["tinfoil_container_url"]
+
+    # Check if sandbox is running and locked/unlocked
+    status = "unknown"
+    locked = True
+    try:
+        r = await http.get(
+            f"{sandbox_url}/health",
+            headers=_tinfoil_headers(),
+            timeout=httpx.Timeout(connect=5, read=5, write=5, pool=5),
+        )
+        if r.status_code == 200:
+            health = r.json()
+            status = "running"
+            locked = health.get("unlockedUsers", 0) == 0
+        else:
+            status = "unreachable"
+    except Exception:
+        status = "unreachable"
+
+    return web.json_response({
+        "user_id": user_id,
+        "provisioned": True,
+        "sandbox_url": sandbox_url,
+        "container_id": record.get("tinfoil_container_id", ""),
+        "status": status,
+        "locked": locked,
+    })
+
+
 # ── Main ─────────────────────────────────────────────────────────────────
 async def main() -> None:
     log.info("Starting VITA Telegram bot (Python/aiogram + E2B)...")
@@ -1995,16 +2270,19 @@ async def main() -> None:
     log.info(f"Supermemory: {'enabled' if SUPERMEMORY_API_KEY else 'disabled'}")
     log.info(f"Consolidation: {CONSOLIDATION_HOUR_UTC}:00 UTC daily")
     log.info(f"Webhook server: port {WEBHOOK_PORT}")
+    log.info(f"Tinfoil Admin: {'enabled' if TINFOIL_ADMIN_KEY else 'disabled'}")
 
     # Start consolidation scheduler as background task
     asyncio.create_task(consolidation_scheduler())
 
-    # Start webhook HTTP server for cron delivery
+    # Start webhook HTTP server for cron delivery + VitaApp integration
     app = web.Application()
     app.router.add_post("/api/cron-webhook", handle_cron_webhook)
     app.router.add_post("/api/query", handle_data_query)
     app.router.add_post("/api/aubrai", handle_aubrai_submit)
     app.router.add_post("/api/flush", handle_flush)
+    app.router.add_post("/api/provision-agent", handle_provision_agent)
+    app.router.add_get("/api/agent-status", handle_agent_status)
     app.router.add_get("/health", handle_health)
     runner = web.AppRunner(app)
     await runner.setup()

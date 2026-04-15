@@ -38,4 +38,6 @@ shim:
     - /api/query
     - /api/aubrai
     - /api/flush
+    - /api/provision-agent
+    - /api/agent-status
     - /health
