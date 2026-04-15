@@ -1013,13 +1013,13 @@ async def get_or_create_tinfoil_sandbox(user_id: str) -> dict:
 
     # 2. Check Supabase for existing container
     record = await sb_select_one(
-        "openclaw_agents", "user_id,tinfoil_container_id,tinfoil_container_url",
+        "openclaw_agents", "user_id,openclaw_agent_id,tinfoil_container_url",
         {"user_id": f"eq.{user_id}"},
         schema="agents",
     )
     if record and record.get("tinfoil_container_url"):
         url = record["tinfoil_container_url"]
-        container_id = record.get("tinfoil_container_id", "")
+        container_id = record.get("openclaw_agent_id", "")
         try:
             r = await http.get(
                 f"{url}/health",
@@ -1102,7 +1102,7 @@ async def get_or_create_tinfoil_sandbox(user_id: str) -> dict:
         "openclaw_agents",
         {
             "user_id": user_id,
-            "tinfoil_container_id": container_id,
+            "openclaw_agent_id": container_id,
             "tinfoil_container_url": container_url,
         },
         schema="agents",
@@ -2217,7 +2217,7 @@ async def handle_agent_status(request: web.Request) -> web.Response:
 
     # Check if user has a sandbox
     record = await sb_select_one(
-        "openclaw_agents", "user_id,tinfoil_container_id,tinfoil_container_url",
+        "openclaw_agents", "user_id,openclaw_agent_id,tinfoil_container_url",
         {"user_id": f"eq.{user_id}"},
         schema="agents",
     )
@@ -2255,7 +2255,7 @@ async def handle_agent_status(request: web.Request) -> web.Response:
         "user_id": user_id,
         "provisioned": True,
         "sandbox_url": sandbox_url,
-        "container_id": record.get("tinfoil_container_id", ""),
+        "container_id": record.get("openclaw_agent_id", ""),
         "status": status,
         "locked": locked,
     })
