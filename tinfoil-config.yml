@@ -5,30 +5,32 @@ memory: 8192
 containers:
   - name: "orchestrator"
     # Image is automatically updated by the GitHub Actions workflow
-    image: "ghcr.io/vitadao/vita-tinfoil-agent-orchestrator:v0.1.0@sha256:1345c739c2f3907d03dbf6e90c77f5d00657ab7a36481fc5a12c7d8a4dbf4f49"
+    image: "ghcr.io/vitadao/vita-tinfoil-agent-orchestrator:latest"
     env:
       - WEBHOOK_PORT: "8080"
-      - E2B_TEMPLATE: "vita-agent-v1-dev"
+      - LLM_MODEL_ID: "MiniMaxAI/MiniMax-M2.5"
+      - LLM_MODEL_NAME: "MiniMax M2.5"
     secrets:
+      # Telegram
       - TELEGRAM_BOT_TOKEN
+      # Supabase
       - SUPABASE_URL
       - SUPABASE_SERVICE_ROLE_KEY
-      - E2B_API_KEY
+      # Internal Tinfoil containers
       - QMD_GPU_URL
       - QMD_API_SECRET
       - CLASSIFIER_URL
-      - SUPERMEMORY_API_KEY
+      # Sandbox management
+      - SANDBOX_AUTH_SECRET
+      - TINFOIL_ADMIN_KEY
+      # Webhook auth
       - CRON_WEBHOOK_SECRET
       - BOT_AUTH_SECRET
+      # LLM
       - LLM_BASE_URL
       - LLM_API_KEY
-      - LLM_MODEL_ID
-      - LLM_MODEL_NAME
-      - TINFOIL_SANDBOX_URL
-      - TINFOIL_SANDBOX_AUTH_SECRET
-      - TINFOIL_TEST_USERS
-      - DEV_USER_IDS
-      - BASETEN_API_KEY
+      # External services
+      - SUPERMEMORY_API_KEY
     command: []
 
 shim:
