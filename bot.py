@@ -54,7 +54,7 @@ WEBHOOK_PORT = int(os.environ.get("WEBHOOK_PORT", "8080"))
 TINFOIL_ADMIN_KEY = os.environ.get("TINFOIL_ADMIN_KEY", "")
 TINFOIL_SANDBOX_REPO = os.environ.get("TINFOIL_SANDBOX_REPO", "VitaDAO/vita-tinfoil-agent-sandbox")
 TINFOIL_SANDBOX_TAG = os.environ.get("TINFOIL_SANDBOX_TAG", "v0.4.2")
-TINFOIL_SANDBOX_AUTH_SECRET = os.environ.get("TINFOIL_SANDBOX_AUTH_SECRET", "")
+TINFOIL_SANDBOX_AUTH_SECRET = os.environ.get("SANDBOX_AUTH_SECRET", "")
 TINFOIL_SANDBOX_DEBUG = os.environ.get("TINFOIL_SANDBOX_DEBUG", "true").lower() == "true"
 TINFOIL_API_BASE = "https://api.tinfoil.sh"
 # Secrets to inject into each per-user sandbox (must exist in Tinfoil org)
@@ -140,6 +140,7 @@ async def fetch_qmd_workspace(user_id: str) -> list[dict] | None:
         qmd_client = http if "tinfoil" in QMD_GPU_URL else http_qmd
         r = await qmd_client.get(
             f"{QMD_GPU_URL}/workspace/{user_id}",
+            headers=_qmd_headers,
             timeout=httpx.Timeout(connect=5, read=15, write=5, pool=5),
         )
         if r.status_code == 200:
