@@ -43,23 +43,27 @@ jobs:
           echo "image=${FULL_REF}" >> "$GITHUB_OUTPUT"
           echo "Built and pushed: ${FULL_REF}"
 
-      # Update config with digest and force-move tag (MUST succeed before attestation)
+      # Update tinfoil-config.yml with the real image+digest
       - run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
           sed -i 's|image:.*|image: "${{ steps.build.outputs.image }}"|' tinfoil-config.yml
-          git add tinfoil-config.yml
-          git commit -m "Update image digest to ${{ github.ref_name }}"
-          git tag -f ${{ github.ref_name }}
-          git push origin ${{ github.ref_name }} --force
+          echo "Updated config:"
+          cat tinfoil-config.yml
 
-      # Push to main (non-critical — tag + release are the important ones)
-      - run: git push origin HEAD:main || echo "Warning: main push failed (non-critical)"
-        continue-on-error: true
-
-      # Tinfoil attestation — creates the release from the updated tag
+      # Tinfoil attestation
       - uses: tinfoilsh/pri-build-action@5d450a7f30904866efc401e24484b935b7ed52dd # v0.6.1
         with:
           config-file: ${{ github.workspace }}/tinfoil-config.yml
           github-token: ${{ secrets.GITHUB_TOKEN }}
           prerelease: "false"
+
+      # Commit updated config back to repo so dashboard can validate it
+      # This step is non-critical — the release already exists even if this fails
+      - run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git fetch origin main
+          git rebase origin/main || git rebase --abort
+          git add tinfoil-config.yml
+          git commit -m "Update image digest to ${{ github.ref_name }}" || echo "No changes to commit"
+          git push origin HEAD:main || echo "Warning: failed to push config update (non-critical)"
+        continue-on-error: true
