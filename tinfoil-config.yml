@@ -5,7 +5,7 @@ memory: 8192
 containers:
   - name: "orchestrator"
     # Image is automatically updated by the GitHub Actions workflow
-    image: "ghcr.io/vitadao/vita-tinfoil-agent-orchestrator:v0.2.1@sha256:f25e1b3deecb86ab9071e1b0f0ad4af32d67cf1873943f7e85a5534ee9edd026"
+    image: "ghcr.io/vitadao/vita-tinfoil-agent-orchestrator:v0.3.0@sha256:d4d9eabd59756fdd515977385ae869eedd06713d81f1e0a2bae78a5007c2885f"
     env:
       - WEBHOOK_PORT: "8080"
       - LLM_MODEL_ID: "MiniMaxAI/MiniMax-M2.5"
