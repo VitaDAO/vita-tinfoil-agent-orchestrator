@@ -76,7 +76,6 @@ for name, val in [
     ("TELEGRAM_BOT_TOKEN", TELEGRAM_BOT_TOKEN),
     ("SUPABASE_URL", SUPABASE_URL),
     ("SUPABASE_SERVICE_ROLE_KEY", SUPABASE_KEY),
-    ("E2B_API_KEY", E2B_API_KEY),
     ("QMD_GPU_URL", QMD_GPU_URL),
 ]:
     if not val:
