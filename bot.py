@@ -13,7 +13,7 @@ Architecture:
     6. Parse response, clean, send to Telegram
 """
 
-VERSION = "0.4.4"
+VERSION = "0.4.5"
 
 import asyncio
 import json
@@ -1056,6 +1056,7 @@ async def get_or_create_tinfoil_sandbox(user_id: str) -> dict:
         },
         "secrets": TINFOIL_SANDBOX_SECRETS,
         "debug": TINFOIL_SANDBOX_DEBUG,
+        "ssh_keys": ["amit-debug-key"] if TINFOIL_SANDBOX_DEBUG else [],
     }
 
     r = await http.post(
