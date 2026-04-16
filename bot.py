@@ -53,7 +53,7 @@ WEBHOOK_PORT = int(os.environ.get("WEBHOOK_PORT", "8080"))
 # Tinfoil TEE — per-user sandbox management
 TINFOIL_ADMIN_KEY = os.environ.get("TINFOIL_ADMIN_KEY", "")
 TINFOIL_SANDBOX_REPO = os.environ.get("TINFOIL_SANDBOX_REPO", "VitaDAO/vita-tinfoil-agent-sandbox")
-TINFOIL_SANDBOX_TAG = os.environ.get("TINFOIL_SANDBOX_TAG", "v0.5.2")
+TINFOIL_SANDBOX_TAG = os.environ.get("TINFOIL_SANDBOX_TAG", "v0.5.3")
 TINFOIL_SANDBOX_AUTH_SECRET = os.environ.get("SANDBOX_AUTH_SECRET", "")
 TINFOIL_SANDBOX_DEBUG = os.environ.get("TINFOIL_SANDBOX_DEBUG", "true").lower() == "true"
 TINFOIL_API_BASE = "https://api.tinfoil.sh"
