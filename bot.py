@@ -1440,8 +1440,8 @@ async def cmd_unlock(message: Message) -> None:
 
     user_id = links[0]["user_id"]
 
-    if not TINFOIL_SANDBOX_URL or user_id not in TINFOIL_TEST_USERS:
-        await message.answer("Encryption unlock is not available for your account yet.")
+    if not TINFOIL_ADMIN_KEY:
+        await message.answer("Encryption unlock is not available yet.")
         return
 
     args = message.text.split(maxsplit=1)
@@ -1450,9 +1450,18 @@ async def cmd_unlock(message: Message) -> None:
         await message.answer("Usage: /unlock <your encryption passphrase>")
         return
 
+    # Get user's sandbox URL
+    try:
+        sandbox_info = await get_or_create_tinfoil_sandbox(user_id)
+        sandbox_url = sandbox_info["url"]
+    except Exception as e:
+        log.error(f"[{user_id[:8]}] [TINFOIL] Failed to get sandbox for unlock: {e}")
+        await message.answer("Failed to connect to your sandbox. Please try again.")
+        return
+
     try:
         r = await http.post(
-            f"{TINFOIL_SANDBOX_URL}/unlock",
+            f"{sandbox_url}/unlock",
             headers=_tinfoil_headers(),
             json={"user_id": user_id, "passphrase": passphrase},
             timeout=httpx.Timeout(connect=10, read=60, write=10, pool=10),
