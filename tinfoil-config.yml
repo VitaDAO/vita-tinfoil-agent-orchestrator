@@ -8,8 +8,8 @@ containers:
     image: "ghcr.io/vitadao/vita-tinfoil-agent-orchestrator:v0.3.2@sha256:300ddf986a4199ffea62155c62ad28160e1dbc1a6ac5011b91d6bc5158a12285"
     env:
       - WEBHOOK_PORT: "8080"
-      - LLM_MODEL_ID: "MiniMaxAI/MiniMax-M2.5"
-      - LLM_MODEL_NAME: "MiniMax M2.5"
+      - LLM_MODEL_ID: "kimi-k2-5"
+      - LLM_MODEL_NAME: "Kimi K2.5"
     secrets:
       # Telegram
       - TELEGRAM_BOT_TOKEN

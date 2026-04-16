@@ -1182,6 +1182,8 @@ async def handle_user_message_tinfoil(user_id: str, message_text: str) -> str:
             "session_id": session_id,
             "user_id": user_id,
             "supermemory": sm_ctx,
+            "llm_model_id": LLM_MODEL_ID,
+            "llm_model_name": LLM_MODEL_NAME,
         },
         timeout=httpx.Timeout(connect=10, read=120, write=10, pool=10),
     )
