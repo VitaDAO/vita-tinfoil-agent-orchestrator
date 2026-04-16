@@ -13,6 +13,8 @@ Architecture:
     6. Parse response, clean, send to Telegram
 """
 
+VERSION = "0.4.4"
+
 import asyncio
 import json
 import logging
@@ -53,7 +55,7 @@ WEBHOOK_PORT = int(os.environ.get("WEBHOOK_PORT", "8080"))
 # Tinfoil TEE — per-user sandbox management
 TINFOIL_ADMIN_KEY = os.environ.get("TINFOIL_ADMIN_KEY", "")
 TINFOIL_SANDBOX_REPO = os.environ.get("TINFOIL_SANDBOX_REPO", "VitaDAO/vita-tinfoil-agent-sandbox")
-TINFOIL_SANDBOX_TAG = os.environ.get("TINFOIL_SANDBOX_TAG", "v0.5.3")
+TINFOIL_SANDBOX_TAG = os.environ.get("TINFOIL_SANDBOX_TAG", "v0.5.4")
 TINFOIL_SANDBOX_AUTH_SECRET = os.environ.get("SANDBOX_AUTH_SECRET", "")
 TINFOIL_SANDBOX_DEBUG = os.environ.get("TINFOIL_SANDBOX_DEBUG", "true").lower() == "true"
 TINFOIL_API_BASE = "https://api.tinfoil.sh"
@@ -2145,7 +2147,12 @@ async def handle_flush(request: web.Request) -> web.Response:
 
 
 async def handle_health(request: web.Request) -> web.Response:
-    return web.json_response({"status": "ok"})
+    return web.json_response({
+        "status": "ok",
+        "version": VERSION,
+        "sandbox_tag": TINFOIL_SANDBOX_TAG,
+        "llm_model": LLM_MODEL_ID,
+    })
 
 
 # ── VitaApp integration endpoints ────────────────────────────────────────
